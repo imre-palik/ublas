@@ -14,6 +14,7 @@
 #define _BOOST_UBLAS_OPERATION_
 
 #include <boost/numeric/ublas/matrix_proxy.hpp>
+#include <boost/numeric/ublas/parallel.hpp>
 #include <boost/numeric/ublas/detail/gemm.hpp>
 #include <boost/numeric/ublas/detail/block_sizes.hpp>
 /** \file operation.hpp
@@ -948,7 +949,12 @@ namespace boost { namespace numeric { namespace ublas {
   */
     template <typename E1, typename E2, typename E3>
     BOOST_UBLAS_INLINE
+#ifdef BOOST_UBLAS_OPENMP_
+    typename enable_if_c<is_compound<BlockSize>::value,
+			  void>::type
+#else
     void
+#endif
     gemm(typename E3::value_type alpha, const matrix_expression<E1> &e1,
          const matrix_expression<E2> &e2,
         typename E3::value_type beta, matrix_expression<E3> &e3) {
@@ -967,6 +973,108 @@ namespace boost { namespace numeric { namespace ublas {
         BlockSize b) {
        detail::gemm(alpha, e1, e2, beta, e3, b);
     }
+
+#ifdef BOOST_UBLAS_OPENMP_
+  /** \brief computes <tt>C = alpha * A * B + beta * C</tt> in an
+          optimized and parallelised fashion.
+
+	   \param alpha scalar multiplier
+          \param e1 the matrix expression \c A
+          \param e2 the matrix expression \c B
+	   \param beta scalar multiplier
+          \param e3  the result matrix \c C
+	   \param t the cpu topology to parallelise
+
+         <tt>gemm</tt> implements the well known gemm operation
+	  It needs nested parallelism towork properly.
+	  Because it uses all the CPUs specified, it is not usable with
+	  nested parallelism.
+
+	  It works the best if the matrix dimensions are greater than <tt>mc</tt>
+
+          \ingroup blas3
+
+          \internal
+
+          template parameters:
+          \param E1 type of a matrix expression \c A
+          \param E2 type of a matrix expression \c B
+          \param E3 type of a matrix expression \c C
+  */
+    template <typename E1, typename E2, typename E3>
+    BOOST_UBLAS_INLINE
+    void
+    gemm(typename E3::value_type alpha, const matrix_expression<E1> &e1,
+         const matrix_expression<E2> &e2,
+	  typename E3::value_type beta, matrix_expression<E3> &e3,
+	  cpu_topology t) {
+         typedef typename detail::prod_block_size<typename common_type<typename E1::value_type,
+                                                                      typename E2::value_type,
+                                                                      typename E3::value_type>::type> block_sizes;
+	  detail::gemm(alpha, e1, e2, beta, e3, t, block_sizes());
+    }
+
+    template <typename E1, typename E2, typename E3, typename BlockSize>
+    BOOST_UBLAS_INLINE
+    void
+    gemm(typename E3::value_type alpha, const matrix_expression<E1> &e1,
+         const matrix_expression<E2> &e2,
+	  typename E3::value_type beta, matrix_expression<E3> &e3,
+	  cpu_topology t, BlockSize b) {
+         detail::gemm(alpha, e1, e2, beta, e3, t, b);
+    }
+
+  /** \brief computes <tt>C = alpha * A * B + beta * C</tt> in an
+          optimized and parallelised fashion.
+
+	   \param alpha scalar multiplier
+          \param e1 the matrix expression \c A
+          \param e2 the matrix expression \c B
+	   \param beta scalar multiplier
+          \param e3  the result matrix \c C
+	   \param cores the number of cores to parallelise to
+
+         <tt>gemm</tt> implements the well known gemm operation.
+
+	 Because of the cache-avare nature of the implementation,
+	 the core parameter doesn't scale through socket boundaries.
+	 If need be, then use the other parallel version
+
+	 It is implemented with proc_bind(close), so it nests nicely
+	 with proc_bind(spread) parallelism.
+
+          \ingroup blas3
+
+          \internal
+
+          template parameters:
+          \param E1 type of a matrix expression \c A
+          \param E2 type of a matrix expression \c B
+          \param E3 type of a matrix expression \c C
+  */
+    template <typename E1, typename E2, typename E3>
+    BOOST_UBLAS_INLINE
+    void
+    gemm(typename E3::value_type alpha, const matrix_expression<E1> &e1,
+         const matrix_expression<E2> &e2,
+	 typename E3::value_type beta, matrix_expression<E3> &e3,
+	 unsigned cores) {
+        typedef typename detail::prod_block_size<typename common_type<typename E1::value_type,
+                                                                      typename E2::value_type,
+                                                                      typename E3::value_type>::type> block_sizes;
+	detail::gemm(alpha, e1, e2, beta, e3, cores, block_sizes());
+    }
+
+    template <typename E1, typename E2, typename E3, typename BlockSize>
+    BOOST_UBLAS_INLINE
+    void
+    gemm(typename E3::value_type alpha, const matrix_expression<E1> &e1,
+         const matrix_expression<E2> &e2,
+	 typename E3::value_type beta, matrix_expression<E3> &e3,
+	 unsigned cores, BlockSize b) {
+        detail::gemm(alpha, e1, e2, beta, e3, cores, b);
+    }
+#endif
 
 }}}
 
