@@ -485,7 +485,7 @@ namespace boost { namespace numeric { namespace ublas { namespace detail {
         const Index mr_ = mc % MR;
         const Index nr_ = nc % NR;
 
-#pragma omp parallel for proc_bind(close) num_threads(cores) 
+#pragma omp parallel for proc_bind(close) num_threads(cores)
         for (Index j=0; j<np; ++j) {
             const Index nr = (j!=np-1 || nr_==0) ? NR : nr_;
             TC C_[MR*NR];
@@ -812,21 +812,21 @@ namespace boost { namespace numeric { namespace ublas { namespace detail {
             for (size_type l=0; l<kb; ++l) {
                 size_type kc = (l!=kb-1 || kc_==0) ? KC : kc_;
                 value_type3 beta_ = (l==0) ? beta : value_type3(1);
- 
+
                  const matrix_range<const E2> Bs =
                      subrange(e2(), l*KC, l*KC+kc, j*NC, j*NC+nc);
                 pack_B(Bs, &B[0], bs);
- 
+
                  for (size_type i=0; i<mb; ++i) {
                      size_type mc = (i!=mb-1 || mc_==0) ? MC : mc_;
- 
+
                      const matrix_range<const E1> As =
                          subrange(e1(), i*MC, i*MC+mc, l*KC, l*KC+kc);
                     pack_A(As, &A[0], bs);
- 
+
                     mgemm(mc, nc, kc, alpha, &A[0], &B[0], beta_,
-			   &C_[i*MC*incRowC+j*NC*incColC],
-			   incRowC, incColC, cores, bs);
+                           &C_[i*MC*incRowC+j*NC*incColC],
+                           incRowC, incColC, cores, bs);
                  }
              }
          }
@@ -864,13 +864,16 @@ namespace boost { namespace numeric { namespace ublas { namespace detail {
         const size_type nc_ = n % NC;
         const size_type kc_ = k % KC;
 
-	 unsigned const sockets = std::min<size_type>(t.sockets, mb);
+         unsigned const sockets = std::min<size_type>(t.sockets, nb * kb);
         if (sockets == 1) {
             ::boost::numeric::ublas::detail::gemm(alpha, e1, e2, beta, e3, t.cores_per_sockets, bs);
             return;
-	 }
+         }
 
-        value_type3 *C_ = &e3()(0,0);
+
+	value_type3 *C = &e3()(0,0);
+	matrix<value_type3> Ct[sockets];
+	value_type3 *C_[sockets] = {&e3()(0,0)};
         const size_type incRowC = &e3()(1,0) - &e3()(0,0);
         const size_type incColC = &e3()(0,1) - &e3()(0,0);
 
@@ -885,36 +888,46 @@ namespace boost { namespace numeric { namespace ublas { namespace detail {
 	 // allocating local arrays
 #pragma omp parallel num_threads(sockets), proc_bind(spread)
         {
-            A[omp_get_thread_num()] = array_type_i(MC * KC);
-            B[omp_get_thread_num()] = array_type_i(NC * KC);
+	    unsigned t = omp_get_thread_num();
+            A[t] = array_type_i(MC * KC);
+            B[t] = array_type_i(NC * KC);
+	    Ct[t] = matrix<value_type3>(m, n, value_type3(0));
+	    C_[t] = &Ct[t](0,0);
         }
+	const size_type ir = m;
+	static const size_type ic = 1;
 
-#pragma omp parallel for num_threads(sockets), proc_bind(spread)
-        for (size_type i=0; i<mb; ++i) {
-            size_type mc = (i!=mb-1 || mc_==0) ? MC : mc_;
-            unsigned thread = omp_get_thread_num();
+#pragma omp parallel for num_threads(sockets), proc_bind(spread), collapse(2)
+	for (size_type j=0; j<nb; ++j) {
+	    for (size_type l=0; l<kb; ++l) {
+	        unsigned thread = omp_get_thread_num();
+		size_type nc = (j!=nb-1 || nc_==0) ? NC : nc_;
+		size_type kc = (l!=kb-1 || kc_==0) ? KC : kc_;
 
-            for (size_type l=0; l<kb; ++l) {
-                size_type kc = (l!=kb-1 || kc_==0) ? KC : kc_;
-                value_type3 beta_ = (l==0) ? beta : value_type3(1);
+		const matrix_range<const E2> Bs =
+		    subrange(e2(), l*KC, l*KC+kc, j*NC, j*NC+nc);
+		pack_B(Bs, &B[thread][0], bs);
 
-                const matrix_range<const E1> As =
-                    subrange(e1(), i*MC, i*MC+mc, l*KC, l*KC+kc);
-                pack_A(As, &A[thread][0], bs);
+		for (size_type i=0; i<mb; ++i) {
+		    size_type mc = (i!=mb-1 || mc_==0) ? MC : mc_;
 
-                for (size_type j=0; j<nb; ++j) {
-                    size_type nc = (j!=nb-1 || nc_==0) ? NC : nc_;
+		    const matrix_range<const E1> As =
+		        subrange(e1(), i*MC, i*MC+mc, l*KC, l*KC+kc);
+                    pack_A(As, &A[thread][0], bs);
 
-                    const matrix_range<const E2> Bs =
-                        subrange(e2(), l*KC, l*KC+kc, j*NC, j*NC+nc);
-                    pack_B(Bs, &B[thread][0], bs);
-
-                    mgemm(mc, nc, kc, alpha, &A[thread][0], &B[thread][0], beta_,
-                          &C_[i*MC*incRowC+j*NC*incColC],
-			   incRowC, incColC, t.cores_per_sockets, bs);
+                    mgemm(mc, nc, kc, alpha, &A[thread][0], &B[thread][0], value_type3(1),
+			  &C_[thread][i*MC* ir +j*NC* ic],
+			  ir, ic, t.cores_per_sockets, bs);
                 }
             }
         }
+	gescal(m, n, beta, C, incRowC, incColC);
+#pragma omp parallel for num_threads(t.sockets * t.cores_per_sockets), collapse(2)
+	for (unsigned r = 0; r < m; r++)
+	    for (unsigned c = 0; c < n; c++)
+                for (unsigned t = 0; t < sockets; t++) {
+                    C[r * incRowC + c * incColC] += C_[t][r * ir + c * ic];
+                }
     }
 
 #endif
